@@ -30,6 +30,7 @@
 #include "PHY/defs_gNB.h"
 #include "PHY/defs_nr_common.h"
 #include "PHY/impl_defs_nr.h"
+#include "PHY/MODULATION/nr_phy_metric_trace.h"
 #include "SCHED_NR/phy_frame_config_nr.h"
 #include "SCHED_NR/sched_nr.h"
 #include "assertions.h"
@@ -402,6 +403,21 @@ void init_gNB()
     gNB->prach_energy_counter = 0;
     gNB->chest_time = get_softmodem_params()->chest_time;
     gNB->chest_freq = get_softmodem_params()->chest_freq;
+    // !!!!!!!!! for modified OTFS !!!!!!!!!
+    gNB->motfs_enable = get_softmodem_params()->motfs_enable;
+    // for the metric
+    const nr_phy_metric_config_t metric_cfg = {
+        .enabled = get_softmodem_params()->metric_enable,
+        .dump_dir = get_softmodem_params()->metric_dump_dir,
+        .mode = get_softmodem_params()->metric_mode,
+        .rv0_only = get_softmodem_params()->metric_rv0_only,
+        .new_tx_only = get_softmodem_params()->metric_new_tx_only,
+        .rnti_filter = get_softmodem_params()->metric_rnti_filter,
+        .skip_ra = get_softmodem_params()->metric_skip_ra,
+        .max_records = get_softmodem_params()->metric_max_records,
+        .drop_when_full = get_softmodem_params()->metric_drop_when_full,
+    };
+    nr_phy_metric_init(&gNB->metric, &metric_cfg);
   }
 }
 

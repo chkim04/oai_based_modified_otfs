@@ -21,6 +21,8 @@
 #include "common/utils/threadPool/task_ans.h"
 #include "openair1/PHY/defs_RU.h"
 #include "common/utils/ds/spsc_q.h"
+// for the metric
+#include "openair1/PHY/MODULATION/nr_phy_metric_trace.h"
 
 #define MAX_NUM_RU_PER_gNB 8
 #define MAX_PUCCH0_NID 8
@@ -131,6 +133,9 @@ typedef struct {
   /// flag used to clear d properly
   /// set to true in nr_fill_ulsch() when new_data_indicator is received
   bool harq_to_be_cleared;
+  // for the metric
+  /// Skip metric tracing for this HARQ/PUSCH instance, for example RA Msg3.
+  bool metric_skip;
   /// Pointer to the payload (38.212 V15.4.0 section 5.1)
   uint8_t *b;
   /// Pointer to aggregated code blocks after code block segmentation and CRC attachment (38.212 V15.4.0 section 5.2.2)
@@ -179,6 +184,9 @@ typedef struct {
   uint32_t frame;
   /// Slot where current PUSCH pdu was sent
   uint32_t slot;
+  // for the metric
+  /// Skip metric tracing for this PUSCH job, for example RA Msg3.
+  bool metric_skip;
   /// ULSCH PDU
   nfapi_nr_pusch_pdu_t pusch_pdu;
 } NR_gNB_PUSCH_job_t;
@@ -244,6 +252,18 @@ typedef struct {
   /// \brief llr values.
   /// - first index: ? [0..1179743] (hard coded)
   int16_t *llr;
+  // !!!!!!!!! for modified OTFS !!!!!!!!!
+  /// Experimental MOTFS post-M-IDFT symbol buffer, ordered as buffer[t * M + m].
+  c16_t *motfs_rx_buffer;
+  // !!!!!!!!! for modified OTFS !!!!!!!!!
+  /// Experimental MOTFS post-N-DFT symbol buffer, ordered as buffer[t * M + m].
+  c16_t *motfs_despread_buffer;
+  // for the metric
+  /// Experimental metric QAM symbol scratch buffer, ordered as buffer[t * M + m].
+  c16_t *metric_rx_qam_buffer;
+  // for the metric
+  /// Skip metric tracing for the current PUSCH reception.
+  bool metric_skip;
   // PTRS symbol index, to be updated every PTRS symbol within a slot.
   uint8_t ptrs_symbol_index;
   /// bit mask of PT-RS ofdm symbol indicies
@@ -399,6 +419,12 @@ typedef struct PHY_VARS_gNB_s {
   int chest_time;
   /// indicate the channel estimation technique in freq domain
   int chest_freq;
+  // !!!!!!!!! for modified OTFS !!!!!!!!!
+  /// enable experimental MOTFS matched PUSCH receiver
+  int motfs_enable;
+  // for the metric
+  /// disabled-by-default experimental PHY metric trace state
+  nr_phy_metric_state_t metric;
 
   /// counter to average prach energh over first 100 prach opportunities
   int prach_energy_counter;

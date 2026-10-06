@@ -912,6 +912,12 @@ set(PHY_SRC_UE
   ${OPENAIR1_DIR}/PHY/INIT/nr_init.c
   ${OPENAIR1_DIR}/PHY/INIT/nr_parms.c
   ${OPENAIR1_DIR}/PHY/MODULATION/nr_modulation.c
+  # // !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+  ${OPENAIR1_DIR}/PHY/MODULATION/nr_ddchan.c
+  # // !!!!!!!!! for modified OTFS !!!!!!!!!
+  ${OPENAIR1_DIR}/PHY/MODULATION/nr_motfs.c
+  # // for the metric
+  ${OPENAIR1_DIR}/PHY/MODULATION/nr_phy_metric_trace.c
   ${OPENAIR1_DIR}/PHY/NR_TRANSPORT/nr_prs.c
   ${OPENAIR1_DIR}/PHY/NR_TRANSPORT/nr_pss.c
   ${OPENAIR1_DIR}/PHY/NR_TRANSPORT/nr_sss.c

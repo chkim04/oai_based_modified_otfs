@@ -18,6 +18,10 @@
 #include "T_messages_creator.h"
 #include <sys/time.h>
 #include "openair1/SCHED_NR/sched_nr.h"
+// !!!!!!!!! for modified OTFS !!!!!!!!!
+#include "openair1/PHY/MODULATION/nr_motfs.h"
+// for the metric
+#include "openair1/PHY/MODULATION/nr_phy_metric_trace.h"
 
 #if T_TRACER
 static void copy_c16_data_to_slot_memory(c16_t *src, c16_t *dst_slot, int nb_re_pusch, int symbol)
@@ -171,7 +175,117 @@ static int get_nb_re_pusch (NR_DL_FRAME_PARMS *frame_parms, const nfapi_nr_pusch
     }
     else return(rel15_ul->rb_size *(12 - (rel15_ul->num_dmrs_cdm_grps_no_data*4)));
   } else
-    return (rel15_ul->rb_size * NR_NB_SC_PER_RB);
+	  return (rel15_ul->rb_size * NR_NB_SC_PER_RB);
+}
+
+// for the metric
+static uint8_t nr_pusch_metric_count_data_symbols(const nfapi_nr_pusch_pdu_t *rel15_ul)
+{
+  uint8_t N = 0;
+  const int end_symbol = rel15_ul->start_symbol_index + rel15_ul->nr_of_symbols;
+  for (int symbol = rel15_ul->start_symbol_index; symbol < end_symbol; symbol++) {
+    const bool is_dmrs = ((rel15_ul->ul_dmrs_symb_pos >> symbol) & 0x01) != 0;
+    if (!is_dmrs)
+      N++;
+  }
+  return N;
+}
+
+// for the metric
+static nr_phy_metric_pusch_ctx_t nr_pusch_metric_make_ctx(uint32_t frame,
+                                                         uint8_t slot,
+                                                         const nfapi_nr_pusch_pdu_t *rel15_ul,
+                                                         uint32_t G,
+                                                         uint16_t M,
+                                                         uint8_t N,
+                                                         nr_phy_metric_waveform_t waveform)
+{
+  return (nr_phy_metric_pusch_ctx_t){
+      .frame = frame & 0xffff,
+      .slot = slot,
+      .rnti = rel15_ul->rnti,
+      .harq_id = rel15_ul->pusch_data.harq_process_id,
+      .rv = rel15_ul->pusch_data.rv_index,
+      .ndi = rel15_ul->pusch_data.new_data_indicator,
+      .qam_mod_order = rel15_ul->qam_mod_order,
+      .mcs_index = rel15_ul->mcs_index,
+      .nr_layers = rel15_ul->nrOfLayers,
+      .transform_precoding = rel15_ul->transform_precoding,
+      .rb_start = rel15_ul->rb_start,
+      .rb_size = rel15_ul->rb_size,
+      .start_symbol = rel15_ul->start_symbol_index,
+      .nr_symbols = rel15_ul->nr_of_symbols,
+      .ul_dmrs_symb_pos = rel15_ul->ul_dmrs_symb_pos,
+      .dmrs_config_type = rel15_ul->dmrs_config_type,
+      .num_dmrs_cdm_grps_no_data = rel15_ul->num_dmrs_cdm_grps_no_data,
+      .frequency_hopping = rel15_ul->frequency_hopping,
+      .M = M,
+      .N = N,
+      .G = G,
+      .n_qam = (uint32_t)M * N,
+      .tb_size = rel15_ul->pusch_data.tb_size,
+      .waveform = waveform,
+  };
+}
+
+// for the metric
+static void nr_pusch_metric_trace_dfts_qam(PHY_VARS_gNB *gNB,
+                                           NR_gNB_PUSCH *pusch_vars,
+                                           const nfapi_nr_pusch_pdu_t *rel15_ul,
+                                           uint32_t frame,
+                                           uint8_t slot,
+                                           uint32_t G)
+{
+  if (!nr_phy_metric_is_enabled(&gNB->metric))
+    return;
+  if (gNB->metric.skip_ra && pusch_vars->metric_skip)
+    return;
+  if (rel15_ul->nrOfLayers != 1 || rel15_ul->transform_precoding != transformPrecoder_enabled)
+    return;
+  if (rel15_ul->pdu_bit_map & PUSCH_PDU_BITMAP_PUSCH_PTRS)
+    return;
+  if (pusch_vars->metric_rx_qam_buffer == NULL)
+    return;
+
+  const uint16_t M = rel15_ul->rb_size * NR_NB_SC_PER_RB;
+  const uint8_t N = nr_pusch_metric_count_data_symbols(rel15_ul);
+  nr_phy_metric_pusch_ctx_t ctx =
+      nr_pusch_metric_make_ctx(frame, slot, rel15_ul, G, M, N, NR_PHY_METRIC_WAVEFORM_DFT_S_OFDM);
+  if (!nr_phy_metric_should_trace_gnb_rx_qam(&gNB->metric, &ctx))
+    return;
+
+  const int buffer_length = ceil_mod(M, 16);
+  uint8_t t = 0;
+  const int end_symbol = rel15_ul->start_symbol_index + rel15_ul->nr_of_symbols;
+  for (int symbol = rel15_ul->start_symbol_index; symbol < end_symbol; symbol++) {
+    const bool is_dmrs = ((rel15_ul->ul_dmrs_symb_pos >> symbol) & 0x01) != 0;
+    if (is_dmrs)
+      continue;
+    memcpy(&pusch_vars->metric_rx_qam_buffer[t * M], &pusch_vars->rxdataF_comp[0][symbol * buffer_length], sizeof(c16_t) * M);
+    t++;
+  }
+
+  nr_phy_metric_trace_gnb_rx_qam(&gNB->metric, &ctx, pusch_vars->metric_rx_qam_buffer);
+}
+
+// for the metric
+static void nr_pusch_metric_trace_motfs_qam(PHY_VARS_gNB *gNB,
+                                            NR_gNB_PUSCH *pusch_vars,
+                                            const nfapi_nr_pusch_pdu_t *rel15_ul,
+                                            const c16_t *qam,
+                                            uint32_t frame,
+                                            uint8_t slot,
+                                            uint32_t G,
+                                            uint16_t M,
+                                            uint8_t N)
+{
+  if (!nr_phy_metric_is_enabled(&gNB->metric))
+    return;
+  if (gNB->metric.skip_ra && pusch_vars->metric_skip)
+    return;
+
+  nr_phy_metric_pusch_ctx_t ctx = nr_pusch_metric_make_ctx(frame, slot, rel15_ul, G, M, N, NR_PHY_METRIC_WAVEFORM_MOTFS);
+  nr_phy_metric_trace_gnb_rx_qam(&gNB->metric, &ctx, qam);
 }
 
 static void nr_ulsch_channel_compensation(uint32_t buffer_length,
@@ -867,6 +981,8 @@ static void inner_rx(PHY_VARS_gNB *gNB,
                      uint32_t nvar,
                      c16_t *rxFext_slot,
                      c16_t *chFext_slot,
+                     // !!!!!!!!! for modified OTFS !!!!!!!!!
+                     bool delay_llr,
                      time_stats_t *pusch_extr,
                      time_stats_t *pusch_ch_comp,
                      time_stats_t *ulsch_llr)
@@ -966,6 +1082,9 @@ static void inner_rx(PHY_VARS_gNB *gNB,
                              buffer_length);
     pusch_vars->ul_valid_re_per_slot[symbol] -= pusch_vars->ptrs_re_per_slot;
   }
+  // !!!!!!!!! for modified OTFS !!!!!!!!!
+  if (delay_llr)
+    return;
   start_meas(ulsch_llr);
   if (nb_layer == 2) {
     if (rel15_ul->qam_mod_order <= 6) {
@@ -1065,6 +1184,8 @@ static void nr_pusch_symbol_processing(void *arg)
              rdata->nvar,
              rdata->rxFext_slot_mem,
              rdata->pusch_ch_est_dmrs_interpl_slot_mem,
+             // !!!!!!!!! for modified OTFS !!!!!!!!!
+             false,
              &rdata->pusch_extr,
              &rdata->pusch_ch_comp,
              &rdata->ulsch_llr);
@@ -1100,6 +1221,163 @@ static void nr_pusch_symbol_processing(void *arg)
 
   // Task running in // completed
   completed_task_ans(rdata->ans);
+}
+
+// !!!!!!!!! for modified OTFS !!!!!!!!!
+static void nr_pusch_motfs_assert_supported(const PHY_VARS_gNB *gNB, const nfapi_nr_pusch_pdu_t *rel15_ul)
+{
+  AssertFatal(gNB->motfs_enable == 1, "MOTFS PUSCH RX called while disabled\n");
+  AssertFatal(rel15_ul->transform_precoding == transformPrecoder_enabled,
+              "MOTFS PUSCH RX supports transform-precoded PUSCH only\n");
+  AssertFatal(rel15_ul->nrOfLayers == 1, "MOTFS PUSCH RX supports rank 1 only, got %d layers\n", rel15_ul->nrOfLayers);
+  AssertFatal(rel15_ul->qam_mod_order == 2, "MOTFS PUSCH RX supports QPSK only, got Qm=%d\n", rel15_ul->qam_mod_order);
+  AssertFatal((rel15_ul->pdu_bit_map & PUSCH_PDU_BITMAP_PUSCH_PTRS) == 0, "MOTFS PUSCH RX does not support PTRS yet\n");
+  AssertFatal((rel15_ul->pdu_bit_map & PUSCH_PDU_BITMAP_PUSCH_UCI) == 0, "MOTFS PUSCH RX does not support UCI on PUSCH yet\n");
+  AssertFatal(rel15_ul->frequency_hopping == 0, "MOTFS PUSCH RX does not support frequency hopping yet\n");
+  AssertFatal(rel15_ul->param_v4.numSpatialStreamIndices == 1,
+              "MOTFS PUSCH RX supports one spatial stream only, got %d\n",
+              rel15_ul->param_v4.numSpatialStreamIndices);
+}
+
+// !!!!!!!!! for modified OTFS !!!!!!!!!
+static uint8_t nr_pusch_motfs_build_data_symbol_list(NR_DL_FRAME_PARMS *frame_parms,
+                                                     NR_gNB_PUSCH *pusch_vars,
+                                                     const nfapi_nr_pusch_pdu_t *rel15_ul,
+                                                     uint8_t *data_symbol_list,
+                                                     int *total_res)
+{
+  const int end_symbol = rel15_ul->start_symbol_index + rel15_ul->nr_of_symbols;
+  const int M = rel15_ul->rb_size * NR_NB_SC_PER_RB;
+  uint8_t N = 0;
+  *total_res = 0;
+
+  for (int symbol = rel15_ul->start_symbol_index; symbol < end_symbol; symbol++) {
+    const bool is_dmrs = ((rel15_ul->ul_dmrs_symb_pos >> symbol) & 0x01) != 0;
+    const int nb_re = get_nb_re_pusch(frame_parms, rel15_ul, symbol);
+    pusch_vars->ul_valid_re_per_slot[symbol] = nb_re;
+    pusch_vars->llr_offset[symbol] = symbol == rel15_ul->start_symbol_index
+                                         ? 0
+                                         : pusch_vars->llr_offset[symbol - 1]
+                                               + pusch_vars->ul_valid_re_per_slot[symbol - 1] * rel15_ul->qam_mod_order;
+
+    if (is_dmrs) {
+      AssertFatal(nb_re == 0,
+                  "MOTFS PUSCH RX requires DMRS symbols to carry no data REs, symbol %d has %d data REs\n",
+                  symbol,
+                  nb_re);
+      continue;
+    }
+
+    *total_res += nb_re;
+    if (nb_re == 0)
+      continue;
+
+    AssertFatal(nb_re == M,
+                "MOTFS PUSCH RX expects %d data REs in symbol %d, got %d\n",
+                M,
+                symbol,
+                nb_re);
+    AssertFatal(N < NR_MOTFS_MAX_N, "MOTFS data-symbol count exceeds %d\n", NR_MOTFS_MAX_N);
+    data_symbol_list[N++] = symbol;
+  }
+
+  AssertFatal(N >= NR_MOTFS_MIN_N, "MOTFS PUSCH RX found no data-bearing symbols\n");
+  return N;
+}
+
+// !!!!!!!!! for modified OTFS !!!!!!!!!
+static void nr_pusch_motfs_unscramble_qpsk(int16_t *llr, const int16_t *scramblingSequence, int start, int length)
+{
+  int16_t *llr16 = &llr[start];
+  const int16_t *s = &scramblingSequence[start];
+  int i = 0;
+  for (; (i + 8) <= length; i += 8) {
+    simde__m128i llr128 = simde_mm_loadu_si128((simde__m128i *)&llr16[i]);
+    simde__m128i s128 = simde_mm_loadu_si128((simde__m128i *)&s[i]);
+    simde_mm_storeu_si128((simde__m128i *)&llr16[i], simde_mm_mullo_epi16(llr128, s128));
+  }
+  for (; i < length; i++)
+    llr16[i] *= s[i];
+}
+
+// !!!!!!!!! for modified OTFS !!!!!!!!!
+static int nr_rx_pusch_motfs(PHY_VARS_gNB *gNB,
+                             NR_gNB_PUSCH *pusch_vars,
+                             const nfapi_nr_pusch_pdu_t *rel15_ul,
+                             int16_t *scramblingSequence,
+                             uint32_t nvar,
+                             uint32_t frame,
+                             uint8_t slot,
+                             uint32_t G,
+                             uint16_t ant_port_start,
+                             c16_t *rxFext_slot_mem,
+                             c16_t *pusch_ch_est_dmrs_interpl_slot_mem)
+{
+  nr_pusch_motfs_assert_supported(gNB, rel15_ul);
+
+  NR_DL_FRAME_PARMS *frame_parms = &gNB->frame_parms;
+  uint8_t data_symbol_list[NR_MOTFS_MAX_N] = {0};
+  int total_res = 0;
+  const int M = rel15_ul->rb_size * NR_NB_SC_PER_RB;
+  const int buffer_length = ceil_mod(M, 16);
+  const uint8_t N = nr_pusch_motfs_build_data_symbol_list(frame_parms, pusch_vars, rel15_ul, data_symbol_list, &total_res);
+  int16_t *unused_llr[1] = {NULL};
+
+  start_meas(&gNB->rx_pusch_symbol_processing_stats);
+  for (uint8_t t = 0; t < N; t++) {
+    const int symbol = data_symbol_list[t];
+    const int soffset = (slot % RU_RX_SLOT_DEPTH) * frame_parms->symbols_per_slot * frame_parms->ofdm_symbol_size;
+
+    inner_rx(gNB,
+             slot,
+             frame_parms,
+             pusch_vars,
+             rel15_ul,
+             gNB->common_vars.rxdataF + ant_port_start,
+             unused_llr,
+             soffset,
+             symbol,
+             pusch_vars->log2_maxh,
+             nvar,
+             rxFext_slot_mem,
+             pusch_ch_est_dmrs_interpl_slot_mem,
+             // !!!!!!!!! for modified OTFS !!!!!!!!!
+             true,
+             &gNB->pusch_extraction_stats,
+             &gNB->pusch_channel_compensation_stats,
+             &gNB->ulsch_llr_stats);
+
+    memcpy(&pusch_vars->motfs_rx_buffer[t * M],
+           &pusch_vars->rxdataF_comp[0][symbol * buffer_length],
+           sizeof(*pusch_vars->motfs_rx_buffer) * M);
+  }
+  stop_meas(&gNB->rx_pusch_symbol_processing_stats);
+
+  const int ret = nr_motfs_time_deprecoding(pusch_vars->motfs_rx_buffer, pusch_vars->motfs_despread_buffer, M, N);
+  AssertFatal(ret == 0, "nr_motfs_time_deprecoding failed for M=%d N=%d\n", M, N);
+  // for the metric
+  nr_pusch_metric_trace_motfs_qam(gNB, pusch_vars, rel15_ul, pusch_vars->motfs_despread_buffer, frame, slot, G, M, N);
+
+  start_meas(&gNB->ulsch_llr_stats);
+  for (uint8_t t = 0; t < N; t++) {
+    const int symbol = data_symbol_list[t];
+    const int llr_offset = pusch_vars->llr_offset[symbol];
+    nr_ulsch_compute_llr(&pusch_vars->motfs_despread_buffer[t * M],
+                         NULL,
+                         NULL,
+                         NULL,
+                         &pusch_vars->llr[llr_offset],
+                         M,
+                         symbol,
+                         rel15_ul->qam_mod_order);
+  }
+  stop_meas(&gNB->ulsch_llr_stats);
+
+  start_meas(&gNB->ulsch_unscrambling_stats);
+  nr_pusch_motfs_unscramble_qpsk(pusch_vars->llr, scramblingSequence, 0, total_res * rel15_ul->qam_mod_order);
+  stop_meas(&gNB->ulsch_unscrambling_stats);
+
+  return total_res;
 }
 
 static uint32_t average_u32(const uint32_t *x, uint16_t size)
@@ -1388,63 +1666,79 @@ int nr_rx_pusch_tp(PHY_VARS_gNB *gNB,
 
   stop_meas(&gNB->rx_pusch_init_stats);
 
-  start_meas(&gNB->rx_pusch_symbol_processing_stats);
-  int numSymbols = gNB->num_pusch_symbols_per_thread;
   int total_res = 0;
-  int const loop_iter = CEILIDIV(rel15_ul->nr_of_symbols, numSymbols);
+  int sz_arr = 0;
+  int numSymbols = gNB->num_pusch_symbols_per_thread;
+  int loop_iter = CEILIDIV(rel15_ul->nr_of_symbols, numSymbols);
   puschSymbolProc_t arr[loop_iter];
   task_ans_t ans;
-  init_task_ans(&ans, loop_iter);
 
-  int sz_arr = 0;
-  for(uint8_t task_index = 0; task_index < loop_iter; task_index++) {
-    int symbol = task_index * numSymbols + rel15_ul->start_symbol_index;
-    int res_per_task = 0;
-    for (int s = 0; s < numSymbols && s + symbol < end_symbol; s++) {
-      pusch_vars->ul_valid_re_per_slot[symbol+s] = get_nb_re_pusch(frame_parms,rel15_ul,symbol+s);
-      pusch_vars->llr_offset[symbol+s] = ((symbol+s) == rel15_ul->start_symbol_index) ? 
-                                         0 : 
-                                         pusch_vars->llr_offset[symbol+s-1] + pusch_vars->ul_valid_re_per_slot[symbol+s-1] * rel15_ul->qam_mod_order;
-      res_per_task += pusch_vars->ul_valid_re_per_slot[symbol + s];
-    }
-    total_res += res_per_task;
-    if (res_per_task > 0) {
-      puschSymbolProc_t *rdata = &arr[sz_arr];
-      rdata->ans = &ans;
-      ++sz_arr;
+  // !!!!!!!!! for modified OTFS !!!!!!!!!
+  if (gNB->motfs_enable) {
+    total_res = nr_rx_pusch_motfs(gNB,
+                                  pusch_vars,
+                                  rel15_ul,
+                                  scramblingSequence,
+                                  nvar,
+                                  frame,
+                                  slot,
+                                  G,
+                                  ant_port_start,
+                                  rxFext_slot_mem,
+                                  pusch_ch_est_dmrs_interpl_slot_mem);
+  } else {
+    start_meas(&gNB->rx_pusch_symbol_processing_stats);
+    init_task_ans(&ans, loop_iter);
 
-      rdata->gNB = gNB;
-      rdata->frame_parms = frame_parms;
-      rdata->rel15_ul = rel15_ul;
-      rdata->slot = slot;
-      rdata->startSymbol = symbol;
-      // Last task processes remainder symbols
-      rdata->numSymbols = task_index == loop_iter - 1 ? rel15_ul->nr_of_symbols - (loop_iter - 1) * numSymbols : numSymbols;
-      rdata->pusch_vars = pusch_vars;
-      rdata->llr = pusch_vars->llr;
-      rdata->scramblingSequence = scramblingSequence;
-      rdata->nvar = nvar;
-      rdata->ant_port_start = ant_port_start;
-      rdata->rxFext_slot_mem = rxFext_slot_mem;
-      rdata->pusch_ch_est_dmrs_interpl_slot_mem = pusch_ch_est_dmrs_interpl_slot_mem;
-      reset_meas(&rdata->pusch_extr);
-      reset_meas(&rdata->pusch_ch_comp);
-      reset_meas(&rdata->ulsch_llr);
-      reset_meas(&rdata->ul_demap);
-      reset_meas(&rdata->ul_unscram);
-
-      if (rel15_ul->pdu_bit_map & PUSCH_PDU_BITMAP_PUSCH_PTRS) {
-        nr_pusch_symbol_processing(rdata);
-      } else {
-        task_t t = {.func = &nr_pusch_symbol_processing, .args = rdata};
-        pushTpool(&gNB->threadPool, t);
+    for(uint8_t task_index = 0; task_index < loop_iter; task_index++) {
+      int symbol = task_index * numSymbols + rel15_ul->start_symbol_index;
+      int res_per_task = 0;
+      for (int s = 0; s < numSymbols && s + symbol < end_symbol; s++) {
+        pusch_vars->ul_valid_re_per_slot[symbol+s] = get_nb_re_pusch(frame_parms,rel15_ul,symbol+s);
+        pusch_vars->llr_offset[symbol+s] = ((symbol+s) == rel15_ul->start_symbol_index) ?
+                                           0 :
+                                           pusch_vars->llr_offset[symbol+s-1] + pusch_vars->ul_valid_re_per_slot[symbol+s-1] * rel15_ul->qam_mod_order;
+        res_per_task += pusch_vars->ul_valid_re_per_slot[symbol + s];
       }
+      total_res += res_per_task;
+      if (res_per_task > 0) {
+        puschSymbolProc_t *rdata = &arr[sz_arr];
+        rdata->ans = &ans;
+        ++sz_arr;
 
-      LOG_D(PHY, "%d.%d Added symbol %d to process, in pipe\n", frame, slot, symbol);
-    } else {
-      completed_task_ans(&ans);
-    }
-  } // symbol loop
+        rdata->gNB = gNB;
+        rdata->frame_parms = frame_parms;
+        rdata->rel15_ul = rel15_ul;
+        rdata->slot = slot;
+        rdata->startSymbol = symbol;
+        // Last task processes remainder symbols
+        rdata->numSymbols = task_index == loop_iter - 1 ? rel15_ul->nr_of_symbols - (loop_iter - 1) * numSymbols : numSymbols;
+        rdata->pusch_vars = pusch_vars;
+        rdata->llr = pusch_vars->llr;
+        rdata->scramblingSequence = scramblingSequence;
+        rdata->nvar = nvar;
+        rdata->ant_port_start = ant_port_start;
+        rdata->rxFext_slot_mem = rxFext_slot_mem;
+        rdata->pusch_ch_est_dmrs_interpl_slot_mem = pusch_ch_est_dmrs_interpl_slot_mem;
+        reset_meas(&rdata->pusch_extr);
+        reset_meas(&rdata->pusch_ch_comp);
+        reset_meas(&rdata->ulsch_llr);
+        reset_meas(&rdata->ul_demap);
+        reset_meas(&rdata->ul_unscram);
+
+        if (rel15_ul->pdu_bit_map & PUSCH_PDU_BITMAP_PUSCH_PTRS) {
+          nr_pusch_symbol_processing(rdata);
+        } else {
+          task_t t = {.func = &nr_pusch_symbol_processing, .args = rdata};
+          pushTpool(&gNB->threadPool, t);
+        }
+
+        LOG_D(PHY, "%d.%d Added symbol %d to process, in pipe\n", frame, slot, symbol);
+      } else {
+        completed_task_ans(&ans);
+      }
+    } // symbol loop
+  }
 
 #if T_TRACER
   int dmrs_port = get_dmrs_port(0, rel15_ul->dmrs_ports);
@@ -1479,17 +1773,22 @@ int nr_rx_pusch_tp(PHY_VARS_gNB *gNB,
       rel15_ul->rb_size * NR_NB_SC_PER_RB * rel15_ul->nr_of_symbols * num_sp_streams * rel15_ul->nrOfLayers * 4);
 #endif
 
-  join_task_ans(&ans);
-  for (int i = 0; i < sz_arr; ++i) {
-    // retrieve measurements
-    puschSymbolProc_t *rdata = &arr[i];
-    merge_meas(&gNB->pusch_extraction_stats, &rdata->pusch_extr);
-    merge_meas(&gNB->pusch_channel_compensation_stats, &rdata->pusch_ch_comp);
-    merge_meas(&gNB->ulsch_llr_stats, &rdata->ulsch_llr);
-    merge_meas(&gNB->ulsch_layer_demapping_stats, &rdata->ul_demap);
-    merge_meas(&gNB->ulsch_unscrambling_stats, &rdata->ul_unscram);
+  // !!!!!!!!! for modified OTFS !!!!!!!!!
+  if (!gNB->motfs_enable) {
+    join_task_ans(&ans);
+    for (int i = 0; i < sz_arr; ++i) {
+      // retrieve measurements
+      puschSymbolProc_t *rdata = &arr[i];
+      merge_meas(&gNB->pusch_extraction_stats, &rdata->pusch_extr);
+      merge_meas(&gNB->pusch_channel_compensation_stats, &rdata->pusch_ch_comp);
+      merge_meas(&gNB->ulsch_llr_stats, &rdata->ulsch_llr);
+      merge_meas(&gNB->ulsch_layer_demapping_stats, &rdata->ul_demap);
+      merge_meas(&gNB->ulsch_unscrambling_stats, &rdata->ul_unscram);
+    }
+    stop_meas(&gNB->rx_pusch_symbol_processing_stats);
+    // for the metric
+    nr_pusch_metric_trace_dfts_qam(gNB, pusch_vars, rel15_ul, frame, slot, G);
   }
-  stop_meas(&gNB->rx_pusch_symbol_processing_stats);
 
   // Copy the data to the scope. This cannot be performed in one call to gNBscopeCopy because the data is not contiguous in the
   // buffer due to reference symbol extraction and padding. The gNBscopeCopy call is broken up into steps: trylock, copy, unlock.

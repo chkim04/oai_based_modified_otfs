@@ -18,6 +18,8 @@
 #include "common/utils/threadPool/task_ans.h"
 #include "common/utils/threadPool/thread-pool.h"
 #include "common/utils/threadPool/notified_fifo.h"
+// !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+#include "PHY/MODULATION/nr_ddchan.h"
 
 #define MAX_BANDS_PER_RRU 4
 #define MAX_RRU_CONFIG_SIZE 1024
@@ -565,6 +567,9 @@ typedef struct RU_t_s {
   uint8_t seqno;
   /// initial timestamp used as an offset make first real timestamp 0
   openair0_timestamp_t ts_offset;
+  // !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+  /// experimental pure-Doppler digital channel state for gNB RX samples
+  nr_ddchan_state_t ddchan_rx;
   /// Current state of the RU
   rru_state_t state;
   /// Command to do

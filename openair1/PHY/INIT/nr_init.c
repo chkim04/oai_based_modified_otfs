@@ -187,6 +187,12 @@ void phy_init_nr_gNB(PHY_VARS_gNB *gNB)
     }
     pusch->llr = (int16_t *)malloc16_clear((8 * ((3 * 8 * 6144) + 12))
                                            * sizeof(int16_t)); // [hna] 6144 is LTE and (8*((3*8*6144)+12)) is not clear
+    // !!!!!!!!! for modified OTFS !!!!!!!!!
+    pusch->motfs_rx_buffer = (c16_t *)malloc16_clear(sizeof(*pusch->motfs_rx_buffer) * nb_re_pusch * fp->symbols_per_slot);
+    // !!!!!!!!! for modified OTFS !!!!!!!!!
+    pusch->motfs_despread_buffer = (c16_t *)malloc16_clear(sizeof(*pusch->motfs_despread_buffer) * nb_re_pusch * fp->symbols_per_slot);
+    // for the metric
+    pusch->metric_rx_qam_buffer = (c16_t *)malloc16_clear(sizeof(*pusch->metric_rx_qam_buffer) * nb_re_pusch * fp->symbols_per_slot);
     pusch->ul_valid_re_per_slot = (int16_t *)malloc16_clear(sizeof(int16_t) * fp->symbols_per_slot);
   } // ulsch_id
 }
@@ -240,7 +246,15 @@ void phy_free_nr_gNB(PHY_VARS_gNB *gNB)
     free_and_zero(pusch_vars->rxdataF_comp);
 
     free_and_zero(pusch_vars->llr);
+    // !!!!!!!!! for modified OTFS !!!!!!!!!
+    free_and_zero(pusch_vars->motfs_rx_buffer);
+    // !!!!!!!!! for modified OTFS !!!!!!!!!
+    free_and_zero(pusch_vars->motfs_despread_buffer);
+    // for the metric
+    free_and_zero(pusch_vars->metric_rx_qam_buffer);
   } // ULSCH_id
+  // for the metric
+  nr_phy_metric_close(&gNB->metric);
   free(gNB->pusch_vars);
 
   free_nrLDPC_coding_interface(&gNB->nrLDPC_coding_interface);

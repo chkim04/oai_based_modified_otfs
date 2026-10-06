@@ -17,6 +17,7 @@
 #include "common/utils/LOG/log.h"
 #include "common/utils/bits.h"
 #include "UTIL/OPT/opt.h"
+#include "PHY/NR_TRANSPORT/nr_transport_proto.h"
 
 /* rlc */
 #include "openair2/LAYER2/nr_rlc/nr_rlc_oai_api.h"
@@ -896,6 +897,8 @@ static void nr_generate_Msg3_retransmission(module_id_t module_idP,
                                                       ul_bwp->pusch_Config && ul_bwp->pusch_Config->frequencyHopping,
                                                       UE->rnti,
                                                       nr_mac->beam_info.beam_mode);
+  // for the metric
+  pusch_pdu->handle |= NR_PHY_METRIC_HANDLE_SKIP_RA_PUSCH;
   future_ul_tti_req->n_pdus += 1;
 
   // generation of DCI 0_0 to schedule msg3 retransmission
@@ -1317,6 +1320,8 @@ nr_add_msg3(module_id_t module_idP, int CC_id, frame_t frameP, slot_t slotP, NR_
                                                       ul_bwp->pusch_Config && ul_bwp->pusch_Config->frequencyHopping,
                                                       UE->rnti,
                                                       mac->beam_info.beam_mode);
+  // for the metric
+  pusch_pdu->handle |= NR_PHY_METRIC_HANDLE_SKIP_RA_PUSCH;
   future_ul_tti_req->n_pdus += 1;
 
   // calling function to fill rar message

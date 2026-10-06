@@ -1124,14 +1124,18 @@ static int handle_pusch_job_trigger(PHY_VARS_gNB *gNB, const NR_gNB_PUSCH_job_t 
     return -1;
   }
   /* (re-)initialize this PUSCH context from job data */
-  NR_gNB_ULSCH_t *ulsch = &gNB->ulsch[ULSCH_id];
-  ulsch->active = true;
-  ulsch->frame = job->frame;
-  ulsch->slot = job->slot;
-  ulsch->rnti = pdu->rnti;
-  ulsch->harq_pid = pid;
-  ulsch->harq_process->ulsch_pdu = job->pusch_pdu;
-  if (pdu->pusch_data.new_data_indicator) {
+	  NR_gNB_ULSCH_t *ulsch = &gNB->ulsch[ULSCH_id];
+	  ulsch->active = true;
+	  ulsch->frame = job->frame;
+	  ulsch->slot = job->slot;
+	  ulsch->rnti = pdu->rnti;
+	  ulsch->harq_pid = pid;
+	  ulsch->harq_process->ulsch_pdu = job->pusch_pdu;
+	  // for the metric
+	  ulsch->harq_process->metric_skip = job->metric_skip;
+	  // for the metric
+	  gNB->pusch_vars[ULSCH_id].metric_skip = job->metric_skip;
+	  if (pdu->pusch_data.new_data_indicator) {
     ulsch->harq_process->harq_to_be_cleared = true;
     ulsch->harq_process->round = 0;
   } else {

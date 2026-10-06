@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include "PHY/NR_TRANSPORT/nr_transport_common_proto.h"
+#include "PHY/NR_TRANSPORT/nr_transport_proto.h"
 #include "PHY/NR_TRANSPORT/nr_ulsch.h"
 #include "SCHED_NR/sched_nr.h"
 
@@ -101,7 +102,12 @@ void nr_fill_ulsch(PHY_VARS_gNB *gNB, int frame, int slot, nfapi_nr_pusch_pdu_t 
         ulsch_pdu->pusch_data.harq_process_id,
         ulsch_pdu->pusch_data.new_data_indicator);
 
-  NR_gNB_PUSCH_job_t pusch = {.frame = frame, .slot = slot, .pusch_pdu = *ulsch_pdu};
+  // for the metric
+  const bool metric_skip = (ulsch_pdu->handle & NR_PHY_METRIC_HANDLE_SKIP_RA_PUSCH) != 0;
+  // for the metric
+  ulsch_pdu->handle &= ~NR_PHY_METRIC_HANDLE_SKIP_RA_PUSCH;
+
+  NR_gNB_PUSCH_job_t pusch = {.frame = frame, .slot = slot, .metric_skip = metric_skip, .pusch_pdu = *ulsch_pdu};
   if (gNB->common_vars.beam_id) {
     int fapi_beam_idx = ulsch_pdu->beamforming.prgs_list[0].dig_bf_interface_list[0].beam_idx;
     int bitmap = SL_to_bitmap(ulsch_pdu->start_symbol_index, ulsch_pdu->nr_of_symbols);

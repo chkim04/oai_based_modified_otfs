@@ -14,6 +14,8 @@
 #include "common/utils/fsn.h"
 
 #define NR_PBCH_PDU_BITS 24
+// for the metric
+#define NR_PHY_METRIC_HANDLE_SKIP_RA_PUSCH (1u << 31)
 
 NR_gNB_PHY_STATS_t *get_phy_stats(PHY_VARS_gNB *gNB, uint16_t rnti);
 

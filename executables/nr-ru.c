@@ -24,6 +24,8 @@
 #include "PHY/if4_tools.h"
 
 #include "PHY/defs_nr_common.h"
+// !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+#include "PHY/MODULATION/nr_ddchan.h"
 #include "PHY/phy_extern.h"
 #include "PHY/NR_TRANSPORT/nr_transport_proto.h"
 #include "PHY/INIT/nr_phy_init.h"
@@ -349,14 +351,18 @@ static void rx_rf(RU_t *ru, int *frame, int *slot)
   start_meas(&ru->rx_fhaul);
   int nb = ru->nb_rx;
   void *rxp[nb];
-  for (int i = 0; i < nb; i++)
-    rxp[i] = (void *)&ru->common.rxdata[i][get_samples_slot_timestamp(fp, *slot)];
+  // !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+  c16_t *rxdata[nb];
+  for (int i = 0; i < nb; i++) {
+    rxdata[i] = (c16_t *)&ru->common.rxdata[i][get_samples_slot_timestamp(fp, *slot)];
+    rxp[i] = (void *)rxdata[i];
+  }
 
   openair0_timestamp_t old_ts = proc->timestamp_rx;
   LOG_D(PHY,"Reading %d samples for slot %d (%p)\n", samples_per_slot, *slot, rxp[0]);
 
   openair0_timestamp_t ts;
-  unsigned int rxs;
+  int rxs;
   rxs = ru->rfdevice.trx_read_func(&ru->rfdevice, &ts, rxp, samples_per_slot, nb);
   proc->timestamp_rx = ts-ru->ts_offset;
 
@@ -374,6 +380,14 @@ static void rx_rf(RU_t *ru, int *frame, int *slot)
       ru->ts_offset += (proc->timestamp_rx - old_ts - samples_per_slot_prev);
       proc->timestamp_rx = ts-ru->ts_offset;
     }
+  }
+
+  // !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+  if (nr_ddchan_is_active(&ru->ddchan_rx)) {
+    const int samples_received = rxs > 0 ? (rxs > (int)samples_per_slot ? (int)samples_per_slot : rxs) : 0;
+    AssertFatal(nr_ddchan_apply_gnb_rx(&ru->ddchan_rx, rxdata, nb, samples_received, proc->timestamp_rx) == 0,
+                "Failed to apply experimental gNB RX Doppler channel for RU %d\n",
+                ru->idx);
   }
 
   // compute system frame number (SFN) according to O-RAN-WG4-CUS.0-v02.00 (using alpha=beta=0)
@@ -435,6 +449,13 @@ static void rx_rf(RU_t *ru, int *frame, int *slot)
       rxs = ru->rfdevice.trx_read_func(&ru->rfdevice, &ts, rxp, samples_to_slot_boundary, nb);
       if (rxs != samples_to_slot_boundary)
         LOG_E(PHY, "rx_rf: Asked for %ld samples, got %d from USRP\n", samples_to_slot_boundary, rxs);
+      // !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+      if (nr_ddchan_is_active(&ru->ddchan_rx)) {
+        const int align_samples_received = rxs > 0 ? (rxs > (int)samples_to_slot_boundary ? (int)samples_to_slot_boundary : rxs) : 0;
+        AssertFatal(nr_ddchan_apply_gnb_rx(&ru->ddchan_rx, rxdata, nb, align_samples_received, ts - ru->ts_offset) == 0,
+                    "Failed to apply experimental gNB RX Doppler channel for RU %d during slot-boundary alignment\n",
+                    ru->idx);
+      }
 
       proc->timestamp_rx += samples_to_slot_boundary;
       if (*slot + 1 >= fp->slots_per_frame)
@@ -825,6 +846,49 @@ void *ru_thread(void *param)
   nr_dump_frame_parms(fp);
   nr_phy_init_RU(ru);
   fill_rf_config(ru, ru->rf_config_file);
+  // !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+  int max_rx_block_samples = 0;
+  for (int s = 0; s < fp->slots_per_frame; s++)
+    max_rx_block_samples = max(max_rx_block_samples, (int)get_samples_per_slot(s, fp));
+  const nr_ddchan_config_t ddchan_cfg = {
+      .enabled = get_softmodem_params()->ddchan_enable,
+      .apply_on_gnb_rx = get_softmodem_params()->ddchan_apply_on_gnb_rx,
+      .use_timestamp_phase = true,
+      // to bypass the RA procedure
+      .start_after_ms = get_softmodem_params()->ddchan_start_after_ms,
+      .mode = get_softmodem_params()->ddchan_mode,
+      .doppler_hz = get_softmodem_params()->ddchan_doppler_hz,
+      .amplitude = get_softmodem_params()->ddchan_amplitude,
+      .delay_ns = get_softmodem_params()->ddchan_delay_ns,
+      .delay_samples = get_softmodem_params()->ddchan_delay_samples,
+      .paths = get_softmodem_params()->ddchan_paths,
+      .normalize_power = get_softmodem_params()->ddchan_normalize_power,
+      .max_paths = get_softmodem_params()->ddchan_max_paths,
+      .awgn_enable = get_softmodem_params()->ddchan_awgn_enable,
+      .snr_db = get_softmodem_params()->ddchan_snr_db,
+      .noise_seed = get_softmodem_params()->ddchan_noise_seed,
+      .noise_power_mode = get_softmodem_params()->ddchan_noise_power_mode,
+      .fixed_signal_power = get_softmodem_params()->ddchan_fixed_signal_power,
+      .sample_rate_hz = ru->openair0_cfg.sample_rate,
+      .nb_antennas = ru->nb_rx,
+      .max_block_samples = max_rx_block_samples,
+  };
+  AssertFatal(nr_ddchan_init(&ru->ddchan_rx, &ddchan_cfg) == 0,
+              "Failed to initialize experimental gNB RX delay-Doppler channel for RU %d\n",
+              ru->idx);
+  if (nr_ddchan_is_active(&ru->ddchan_rx)) {
+    LOG_I(PHY,
+          "DDCHAN RU %d gNB RX enabled: sample_rate %.0f Hz, paths %d, max_delay %d samples, max_block %d samples, "
+          "timestamp-based phase, start_after %.3f ms, AWGN %s, noise power %s\n",
+          ru->idx,
+          ru->ddchan_rx.sample_rate_hz,
+          ru->ddchan_rx.num_paths,
+          ru->ddchan_rx.max_delay_samples,
+          ru->ddchan_rx.max_block_samples,
+          get_softmodem_params()->ddchan_start_after_ms,
+          ru->ddchan_rx.awgn_enable ? "enabled" : "disabled",
+          ru->ddchan_rx.use_measured_noise_power ? "measured" : "fixed");
+  }
   fill_split7_2_config(&ru->openair0_cfg.split7, &ru->config, fp);
 
   // Start IF device if any
@@ -1003,6 +1067,8 @@ void *ru_thread(void *param)
   }
 
   ru_thread_status = 0;
+  // !!!!!!!!!!!!!!!!!!!!!for the delay-Doppler channel implementation!!!!!!!!!!!!!!!!!!
+  nr_ddchan_free(&ru->ddchan_rx);
   return &ru_thread_status;
 }
 
@@ -1473,4 +1539,3 @@ static void NRRCconfig_RU(configmodule_interface_t *cfg)
   } // j=0..num_rus
   return;
 }
-
